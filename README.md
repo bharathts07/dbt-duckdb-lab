@@ -73,7 +73,24 @@ The `run_dbt_and_save_history.sh` wrapper archives `target/*.json` after every r
 
 The `timing` command shows model execution times. At this scale (50K rows), all models take roughly the same time and the numbers are measurement noise. The view demonstrates the mechanism and where the data comes from; it becomes informative at real scale where one model typically dominates wall clock.
 
-**No preserved mismatch artifact:** Earlier versions of this lab kept a mixed-invocation artifact pair to demonstrate the failure mode where `dbt source freshness` rewrites `manifest.json` but leaves `run_results.json` from a prior invocation. The `run_dbt_and_save_history.sh` wrapper now includes a skip-if-identical guard that prevents archiving unchanged `run_results.json`, so this mismatch no longer occurs naturally. The behavior `inspect.py` detects is real (freshness updates manifest but produces no run_results at all), but with the current wrapper logic, every archived run has matching invocation IDs.
+**See the artifact mismatch yourself.** `inspect.py` warns when a run's two JSON files
+disagree about which dbt invocation produced them. That is a real thing, not a contrived one,
+and you can cause it in two commands:
+
+```bash
+cd part2_with_dbt
+DBT_PROFILES_DIR=. uv run dbt build            # both files agree
+DBT_PROFILES_DIR=. uv run dbt source freshness # now they do not
+python3 -c "import json;[print(f, json.load(open(f'target/{f}.json'))['metadata']['invocation_id']) for f in ['manifest','run_results']]"
+```
+
+`dbt source freshness` rewrites `manifest.json` but never writes a new `run_results.json`, so
+after that second command the two files in `target/` describe different runs. If a tool joined
+them together it would show you every model with empty SQL and no explanation of why. That is
+the trap `inspect.py` checks for.
+
+The archived runs under `part3_look_at_artifacts/history/` all have matching IDs, because
+`run_dbt_and_save_history.sh` refuses to archive a run that produced no new results.
 
 ## What Makes This a Learning Repo
 
