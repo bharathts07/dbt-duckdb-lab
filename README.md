@@ -38,7 +38,9 @@ cd stage2_dbt && DBT_PROFILES_DIR=. uv run dbt build
 ./stage2_dbt/dbtx.sh build
 
 # Inspect archived runs
-uv run python stage3/inspect.py dag
+uv run python stage3/inspect.py runs                           # list all runs with invocation IDs
+uv run python stage3/inspect.py dag                            # latest run
+uv run python stage3/inspect.py dag --run 20260921T070059-...  # specific run
 uv run python stage3/inspect.py blast stg_shopify_orders
 uv run python stage3/inspect.py timing
 
@@ -65,6 +67,8 @@ uv run python stage3/viz.py
 The `dbtx.sh` wrapper archives `target/*.json` after every run into `stage3/history/<timestamp>-<invocation8>/`. This is necessary because dbt overwrites `run_results.json` on every invocation and keeps no run history. An `on-run-end` hook cannot archive artifacts: hooks render to SQL with no shell escape, and `run_results.json` is written after hooks finish.
 
 `inspect.py` compares `metadata.invocation_id` across `manifest.json` and `run_results.json` because `dbt source freshness` rewrites one but not the other. Without this check, joining run results into manifest nodes can render empty SQL for every node with no explanation.
+
+The `timing` command shows model execution times. At this scale (50K rows), all models take roughly the same time and the numbers are measurement noise. The view demonstrates the mechanism and where the data comes from; it becomes informative at real scale where one model typically dominates wall clock.
 
 ## What Makes This a Learning Repo
 

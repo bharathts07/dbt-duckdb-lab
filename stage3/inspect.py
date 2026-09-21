@@ -1,35 +1,42 @@
 #!/usr/bin/env python3
 """
 Offline inspector for dbt artifacts. Standard library only.
-Reads manifest.json + run_results.json from the latest archived run.
+Reads manifest.json + run_results.json from archived runs.
 """
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
-def load_artifacts() -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+def load_artifacts(run_dir: Optional[str] = None) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """
-    Load the latest archived run. Compare invocation_id across manifest and
-    run_results because dbt source freshness rewrites one and not the other.
+    Load an archived run. If run_dir is None, loads the latest.
+    Compare invocation_id across manifest and run_results because
+    dbt source freshness rewrites one and not the other.
     """
     history = Path(__file__).parent / "history"
     if not history.exists():
         print("No history directory found. Run dbtx.sh first.", file=sys.stderr)
         sys.exit(1)
 
-    dirs = sorted([d for d in history.iterdir() if d.is_dir()], reverse=True)
-    if not dirs:
-        print("No archived runs found.", file=sys.stderr)
-        sys.exit(1)
+    if run_dir:
+        target = history / run_dir
+        if not target.exists() or not target.is_dir():
+            print(f"Run directory not found: {run_dir}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        dirs = sorted([d for d in history.iterdir() if d.is_dir()], reverse=True)
+        if not dirs:
+            print("No archived runs found.", file=sys.stderr)
+            sys.exit(1)
+        target = dirs[0]
 
-    latest = dirs[0]
-    manifest_path = latest / "manifest.json"
-    run_results_path = latest / "run_results.json"
+    manifest_path = target / "manifest.json"
+    run_results_path = target / "run_results.json"
 
     if not manifest_path.exists() or not run_results_path.exists():
-        print(f"Missing artifacts in {latest.name}", file=sys.stderr)
+        print(f"Missing artifacts in {target.name}", file=sys.stderr)
         sys.exit(1)
 
     manifest = json.loads(manifest_path.read_text())
@@ -143,7 +150,13 @@ def cmd_blast(manifest: Dict[str, Any], target: str) -> None:
 
 
 def cmd_timing(manifest: Dict[str, Any], run_results: Dict[str, Any], exec_times: Dict[str, float]) -> None:
-    """Print models sorted by execution time descending."""
+    """
+    Print models sorted by execution time descending.
+
+    Note: At small scale (50K rows), all models take roughly the same time
+    and the numbers are measurement noise. This view shows the mechanism and
+    where the data comes from; it becomes informative at real scale.
+    """
     nodes = manifest.get("nodes", {})
     elapsed = run_results.get("elapsed_time", 0)
 
@@ -167,26 +180,81 @@ def cmd_timing(manifest: Dict[str, Any], run_results: Dict[str, Any], exec_times
         print(f"  {name:30} {exec_time:6.2f}s  {pct:5.1f}%")
 
 
+def cmd_runs() -> None:
+    """List all archived runs with invocation IDs and flag mismatches."""
+    history = Path(__file__).parent / "history"
+    if not history.exists():
+        print("No history directory found.", file=sys.stderr)
+        sys.exit(1)
+
+    dirs = sorted([d for d in history.iterdir() if d.is_dir()], reverse=True)
+    if not dirs:
+        print("No archived runs found.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Archived runs ({len(dirs)}):")
+    print()
+    for d in dirs:
+        manifest_path = d / "manifest.json"
+        run_results_path = d / "run_results.json"
+
+        if not manifest_path.exists() or not run_results_path.exists():
+            print(f"  {d.name:30} [missing artifacts]")
+            continue
+
+        manifest = json.loads(manifest_path.read_text())
+        run_results = json.loads(run_results_path.read_text())
+
+        m_id = manifest.get("metadata", {}).get("invocation_id", "")[:8]
+        r_id = run_results.get("metadata", {}).get("invocation_id", "")[:8]
+
+        flag = "MISMATCH" if m_id != r_id else "ok"
+        print(f"  {d.name:30} manifest={m_id} run_results={r_id} [{flag}]")
+
+
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: inspect.py <command> [args]")
+        print("Usage: inspect.py <command> [args] [--run <dirname>]")
         print("Commands:")
+        print("  runs             - list all archived runs with invocation IDs")
         print("  dag              - print nodes with layer and materialization")
         print("  blast <name>     - print everything downstream of node")
         print("  timing           - print models sorted by execution time")
+        print()
+        print("Options:")
+        print("  --run <dirname>  - inspect specific run (default: latest)")
         sys.exit(1)
 
-    cmd = sys.argv[1]
-    manifest, run_results, exec_times = load_artifacts()
+    # Parse --run flag
+    run_dir = None
+    args = sys.argv[1:]
+    if "--run" in args:
+        idx = args.index("--run")
+        if idx + 1 >= len(args):
+            print("Error: --run requires a directory name", file=sys.stderr)
+            sys.exit(1)
+        run_dir = args[idx + 1]
+        args = args[:idx] + args[idx + 2:]
 
-    if cmd == "dag":
+    if not args:
+        print("Error: command required", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = args[0]
+
+    if cmd == "runs":
+        cmd_runs()
+    elif cmd == "dag":
+        manifest, run_results, exec_times = load_artifacts(run_dir)
         cmd_dag(manifest, exec_times)
     elif cmd == "blast":
-        if len(sys.argv) < 3:
+        if len(args) < 2:
             print("Usage: inspect.py blast <node_name>", file=sys.stderr)
             sys.exit(1)
-        cmd_blast(manifest, sys.argv[2])
+        manifest, run_results, exec_times = load_artifacts(run_dir)
+        cmd_blast(manifest, args[1])
     elif cmd == "timing":
+        manifest, run_results, exec_times = load_artifacts(run_dir)
         cmd_timing(manifest, run_results, exec_times)
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
