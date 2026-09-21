@@ -1,5 +1,5 @@
 """Seeded synthetic sources for the lab, written into the raw schema."""
-import argparse, random
+import argparse, random, csv, tempfile, os
 from datetime import datetime, timedelta
 import duckdb
 
@@ -58,12 +58,23 @@ def generate(db_path="analytics.duckdb", seed=42, defects=frozenset()):
     con = duckdb.connect(db_path)
     try:
         con.execute("create schema if not exists raw")
-        for table, rows in data.items():
-            con.execute(f"drop table if exists raw.{table}")
-            con.execute(f"create table raw.{table} ({DDL[table]})")
-            marks = ", ".join("?" * (DDL[table].count(",") + 1))
-            con.executemany(f"insert into raw.{table} values ({marks})", rows)
-        return {t: len(r) for t, r in data.items()}
+        tmpdir = tempfile.mkdtemp()
+        try:
+            for table, rows in data.items():
+                con.execute(f"drop table if exists raw.{table}")
+                con.execute(f"create table raw.{table} ({DDL[table]})")
+                csv_path = os.path.join(tmpdir, f"{table}.csv")
+                with open(csv_path, "w", newline="") as f:
+                    headers = [h.strip() for h in DDL[table].split(",")]
+                    writer = csv.writer(f)
+                    writer.writerow(headers)
+                    writer.writerows(rows)
+                con.execute(f"COPY raw.{table} FROM '{csv_path}' (FORMAT CSV, HEADER)")
+            return {t: len(r) for t, r in data.items()}
+        finally:
+            for f in os.listdir(tmpdir):
+                os.remove(os.path.join(tmpdir, f))
+            os.rmdir(tmpdir)
     finally:
         con.close()
 

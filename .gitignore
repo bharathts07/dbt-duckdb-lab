@@ -3,4 +3,5 @@ analytics.duckdb
 analytics.duckdb.wal
 logs/
 stage2_dbt/target/
+stage2_dbt/.user.yml
 __pycache__/
