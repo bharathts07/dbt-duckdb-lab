@@ -7,14 +7,12 @@ models:
       - name: currency
         data_tests:
           - accepted_values:
-              arguments:
-                values: ['USD', 'EUR', 'GBP', 'JPY']
+              values: ['USD', 'EUR', 'GBP', 'JPY']
       - name: customer_id
         data_tests:
           - relationships:
-              arguments:
-                to: ref('stg_customers')
-                field: customer_id
+              to: ref('stg_customers')
+              field: customer_id
   - name: stg_customers
     columns:
       - name: customer_id
