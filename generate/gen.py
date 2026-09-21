@@ -65,7 +65,7 @@ def generate(db_path="analytics.duckdb", seed=42, defects=frozenset()):
                 con.execute(f"create table raw.{table} ({DDL[table]})")
                 csv_path = os.path.join(tmpdir, f"{table}.csv")
                 with open(csv_path, "w", newline="") as f:
-                    headers = [h.strip() for h in DDL[table].split(",")]
+                    headers = [col.split()[0] for col in DDL[table].split(",")]
                     writer = csv.writer(f)
                     writer.writerow(headers)
                     writer.writerows(rows)

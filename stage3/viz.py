@@ -63,8 +63,8 @@ def generate_lineage_html(manifest: Dict[str, Any], run_results: Dict[str, Any],
         if unique_id:
             exec_times[unique_id] = exec_time
 
-    # Extract models only, group by layer
-    layers = {"staging": [], "marts": []}
+    # Extract models only
+    model_data = {}
     for unique_id, node in nodes.items():
         if node.get("resource_type") != "model":
             continue
@@ -73,20 +73,56 @@ def generate_lineage_html(manifest: Dict[str, Any], run_results: Dict[str, Any],
         fqn = node.get("fqn", [])
         layer = fqn[-2] if len(fqn) > 2 else "other"
 
-        if layer in layers:
-            sql = node.get("compiled_code") or node.get("raw_code", "")
-            exec_time = exec_times.get(unique_id, 0)
-            depends_on = node.get("depends_on", {}).get("nodes", [])
-            dep_names = [nodes.get(d, {}).get("name", "") for d in depends_on if nodes.get(d, {}).get("resource_type") == "model"]
+        sql = node.get("compiled_code") or node.get("raw_code", "")
+        exec_time = exec_times.get(unique_id, 0)
+        depends_on = node.get("depends_on", {}).get("nodes", [])
+        dep_names = [nodes.get(d, {}).get("name", "") for d in depends_on if nodes.get(d, {}).get("resource_type") == "model"]
 
-            layers[layer].append({
-                "name": name,
-                "sql": sql,
-                "exec_time": exec_time,
-                "deps": dep_names
-            })
+        model_data[name] = {
+            "name": name,
+            "sql": sql,
+            "exec_time": exec_time,
+            "deps": dep_names,
+            "layer": layer
+        }
 
-    # Serialize payload
+    # Compute depth (longest path from roots)
+    def compute_depth(name, memo={}):
+        if name in memo:
+            return memo[name]
+        deps = model_data.get(name, {}).get("deps", [])
+        if not deps:
+            memo[name] = 0
+        else:
+            memo[name] = 1 + max(compute_depth(d, memo) for d in deps if d in model_data)
+        return memo[name]
+
+    for name in model_data:
+        model_data[name]["depth"] = compute_depth(name)
+
+    # Group by depth, but include layer for styling
+    depth_groups = {}
+    for name, data in model_data.items():
+        depth = data["depth"]
+        if depth not in depth_groups:
+            depth_groups[depth] = []
+        depth_groups[depth].append(data)
+
+    # Check for models outside staging/marts
+    unexpected = [m for m in model_data.values() if m["layer"] not in ["staging", "marts"]]
+    if unexpected:
+        print(f"Warning: {len(unexpected)} model(s) found outside staging/marts: {[m['name'] for m in unexpected]}")
+
+    # Flatten into list, sorted by depth then name
+    layered_models = []
+    for depth in sorted(depth_groups.keys()):
+        layered_models.extend(sorted(depth_groups[depth], key=lambda m: m["name"]))
+
+    # Serialize payload (backwards-compat with JS that expects staging/marts keys)
+    layers = {
+        "staging": [m for m in layered_models if m["layer"] == "staging"],
+        "marts": [m for m in layered_models if m["layer"] == "marts"]
+    }
     payload = json.dumps(layers).replace("</", "<\\/")
 
     html = f"""<!DOCTYPE html>
@@ -197,20 +233,48 @@ def generate_lineage_html(manifest: Dict[str, Any], run_results: Dict[str, Any],
     const layerGap = 400;
     const leftMargin = 100;
 
-    // Position nodes in columns
-    const layers = ['staging', 'marts'];
+    // Position nodes by depth
     const positions = {{}};
     const nodes = [];
+    const depthMap = new Map();
 
-    layers.forEach((layer, layerIdx) => {{
-      const layerNodes = data[layer];
-      const x = leftMargin + layerIdx * layerGap;
-      const verticalGap = Math.max(80, (height - 100) / Math.max(1, layerNodes.length - 1));
-
-      layerNodes.forEach((node, i) => {{
-        const y = 50 + i * verticalGap;
-        positions[node.name] = {{ x, y, layer }};
+    // Flatten all models
+    ['staging', 'marts'].forEach(layer => {{
+      data[layer].forEach(node => {{
         nodes.push(node);
+      }});
+    }});
+
+    // Compute depth
+    function computeDepth(name, memo = {{}}) {{
+      if (memo[name] !== undefined) return memo[name];
+      const node = nodes.find(n => n.name === name);
+      if (!node || node.deps.length === 0) {{
+        memo[name] = 0;
+      }} else {{
+        memo[name] = 1 + Math.max(...node.deps.map(d => computeDepth(d, memo)));
+      }}
+      return memo[name];
+    }}
+
+    nodes.forEach(node => {{
+      const depth = computeDepth(node.name);
+      if (!depthMap.has(depth)) depthMap.set(depth, []);
+      depthMap.get(depth).push(node);
+    }});
+
+    // Position by depth columns
+    const sortedDepths = Array.from(depthMap.keys()).sort((a, b) => a - b);
+    sortedDepths.forEach((depth, colIdx) => {{
+      const colNodes = depthMap.get(depth);
+      const x = leftMargin + colIdx * layerGap;
+      const verticalGap = Math.max(80, (height - 100) / Math.max(1, colNodes.length - 1));
+
+      colNodes.forEach((node, i) => {{
+        const y = 50 + i * verticalGap;
+        // Determine layer from original data
+        const layer = (data.staging.find(n => n.name === node.name)) ? 'staging' : 'marts';
+        positions[node.name] = {{ x, y, layer }};
       }});
     }});
 

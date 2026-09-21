@@ -14,6 +14,11 @@ if not rr.exists(): raise SystemExit(0)
 m = json.loads(rr.read_text()).get("metadata", {})
 stamp = m.get("generated_at","").replace("-","").replace(":","").split(".")[0]
 dest = Path("../stage3/history")/f"{stamp}-{(m.get('invocation_id') or 'unknown')[:8]}"
+# Skip if already archived with identical run_results
+if dest.exists() and (dest / "run_results.json").exists():
+    if (dest / "run_results.json").read_bytes() == rr.read_bytes():
+        print(f"invocation did not execute (run_results.json unchanged)")
+        raise SystemExit(0)
 dest.mkdir(parents=True, exist_ok=True)
 for n in ["manifest.json","run_results.json","catalog.json","sources.json"]:
     p = Path("target")/n
