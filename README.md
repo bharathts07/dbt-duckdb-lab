@@ -5,22 +5,22 @@ A hands-on learning repo demonstrating how dbt transforms SQL workflows. Built a
 ## Schema
 
 ```
-raw_customers              raw_salesforce_orders      raw_shopify_orders      raw_fx_rates
+raw_customers              raw_salesforce_orders      raw_shopify_orders      raw_currency_exchange_rates
     |                           |                           |                      |
     |                           |                           |                      |
     v                           v                           v                      v
-stg_customers              stg_salesforce_orders      stg_shopify_orders      stg_fx_rates
+cleaned_customers          cleaned_salesforce_orders  cleaned_shopify_orders  (currency_exchange_rates in raw)
     |                           |                           |                      |
     +---------------------------+---------------------------+                      |
                                 |                                                  |
                                 v                                                  |
-                           int_orders -----------------------------------------------+
+                          all_orders_combined ------------------------------------------+
                                 |                                                  |
                                 v                                                  |
-                           int_orders_fx <------------------------------------------+
+                          orders_converted_to_usd <--------------------------------------+
                                 |
                                 v
-                           daily_revenue
+                           revenue_per_day
 ```
 
 Four sources, six models (three staging views, three marts tables), six data tests, and one singular test asserting parity between stage 1 and stage 2 pipelines.
@@ -31,24 +31,24 @@ Four sources, six models (three staging views, three marts tables), six data tes
 # Regenerate data (flags: --dirty-currency, --null-customer, --late-shopify)
 uv run python generate/gen.py
 
-# Run the stage 1 SQL pipeline (no dbt)
-bash stage1/run.sh
+# Run the part 1 SQL pipeline (no dbt)
+bash part1_by_hand/run.sh
 
-# Run the stage 2 dbt pipeline
-cd stage2_dbt && DBT_PROFILES_DIR=. uv run dbt build
+# Run the part 2 dbt pipeline
+cd part2_with_dbt && DBT_PROFILES_DIR=. uv run dbt build
 
 # Run and archive artifacts (enables inspect.py and viz.py)
-./stage2_dbt/dbtx.sh build
+./part2_with_dbt/run_dbt_and_save_history.sh build
 
 # Inspect archived runs
-uv run python stage3/inspect.py runs                           # list all runs with invocation IDs
-uv run python stage3/inspect.py dag                            # latest run
-uv run python stage3/inspect.py dag --run 20260921T070059-...  # specific run
-uv run python stage3/inspect.py blast stg_shopify_orders
-uv run python stage3/inspect.py timing
+uv run python part3_look_at_artifacts/inspect.py runs                           # list all runs with invocation IDs
+uv run python part3_look_at_artifacts/inspect.py dag                            # latest run
+uv run python part3_look_at_artifacts/inspect.py dag --run 20260921T070059-...  # specific run
+uv run python part3_look_at_artifacts/inspect.py blast cleaned_shopify_orders
+uv run python part3_look_at_artifacts/inspect.py timing
 
 # Generate DAG.md and lineage.html
-uv run python stage3/viz.py
+uv run python part3_look_at_artifacts/viz.py
 ```
 
 ## Reading Order
@@ -57,7 +57,7 @@ uv run python stage3/viz.py
 2. **PAIN.md** for the six exercises demonstrating problems that dbt solves
 3. **LOG.md** to see build measurements and findings
 4. **DAG.md** for the mermaid dependency graph
-5. **stage3/lineage.html** for an interactive offline visualization
+5. **part3_look_at_artifacts/lineage.html** for an interactive offline visualization
 
 ## Warnings
 
@@ -67,14 +67,39 @@ uv run python stage3/viz.py
 
 ## Artifacts
 
-The `dbtx.sh` wrapper archives `target/*.json` after every run into `stage3/history/<timestamp>-<invocation8>/`. This is necessary because dbt overwrites `run_results.json` on every invocation and keeps no run history. An `on-run-end` hook cannot archive artifacts: hooks render to SQL with no shell escape, and `run_results.json` is written after hooks finish.
+The `run_dbt_and_save_history.sh` wrapper archives `target/*.json` after every run into `part3_look_at_artifacts/history/<timestamp>-<invocation8>/`. This is necessary because dbt overwrites `run_results.json` on every invocation and keeps no run history. An `on-run-end` hook cannot archive artifacts: hooks render to SQL with no shell escape, and `run_results.json` is written after hooks finish.
 
 `inspect.py` compares `metadata.invocation_id` across `manifest.json` and `run_results.json` because `dbt source freshness` rewrites one but not the other. Without this check, joining run results into manifest nodes can render empty SQL for every node with no explanation.
 
 The `timing` command shows model execution times. At this scale (50K rows), all models take roughly the same time and the numbers are measurement noise. The view demonstrates the mechanism and where the data comes from; it becomes informative at real scale where one model typically dominates wall clock.
 
-**Preserved artifact:** The mixed-invocation pair in `stage3/history/` is a wrapper artifact from before the skip-if-identical guard was added. It demonstrates a real dbt behavior: `dbt source freshness` updates `manifest.json` with one invocation_id, writes `sources.json` with a different one, and produces no `run_results.json` at all. The pair is kept deliberately as proof that the desync is a real failure mode, not a contrived example, and as a test case for `inspect.py`'s detector.
+**No preserved mismatch artifact:** Earlier versions of this lab kept a mixed-invocation artifact pair to demonstrate the failure mode where `dbt source freshness` rewrites `manifest.json` but leaves `run_results.json` from a prior invocation. The `run_dbt_and_save_history.sh` wrapper now includes a skip-if-identical guard that prevents archiving unchanged `run_results.json`, so this mismatch no longer occurs naturally. The behavior `inspect.py` detects is real (freshness updates manifest but produces no run_results at all), but with the current wrapper logic, every archived run has matching invocation IDs.
 
 ## What Makes This a Learning Repo
 
-This lab is designed to teach by contrast. Six exercises in `PAIN.md` introduce real pipeline problems (the renumber problem, the rename, which-do-I-rerun, dirty currency codes, missing rows, and null customers), then demonstrate how dbt's built-in features solve them. Stage 1 is hand-written SQL with no abstractions. Stage 2 uses dbt's `ref()`, tests, and dependency inference. The singular test `assert_parity` verifies that both pipelines produce identical output.
+This lab is designed to teach by contrast. Six exercises in `PAIN.md` introduce real pipeline problems (the renumber problem, the rename, which-do-I-rerun, dirty currency codes, missing rows, and null customers), then demonstrate how dbt's built-in features solve them. Part 1 is hand-written SQL with no abstractions. Part 2 uses dbt's `ref()`, tests, and dependency inference. The singular test `assert_parity` verifies that both pipelines produce identical output.
+
+## What These Would Be Called in a Real Project
+
+This lab uses plain, self-explanatory names so nothing has to be decoded while learning. In a professional dbt project, you will see models prefixed by their role in the pipeline.
+
+Common prefixes and what they mean:
+
+- **`stg_`** (staging): One model per source table. Light cleanup only (renaming, casting, trimming). No business logic, no joins. The raw-to-clean boundary.
+- **`int_`** (intermediate): Joins, reshaping, and calculations between staging and the final tables. Not meant for end users. Working tables that build toward the business layer.
+- **`fct_`** (fact): The business-facing table of events or transactions. Usually numeric, one row per thing that happened (an order, a pageview, a login).
+- **`dim_`** (dimension): The business-facing table describing entities. One row per customer, product, or campaign.
+- **`fx`**: Standard shorthand for foreign exchange (currency conversion).
+
+Here is how this lab's models would be named in a production project:
+
+| This lab's name | Professional convention |
+|-----------------|-------------------------|
+| `cleaned_salesforce_orders` | `stg_salesforce_orders` |
+| `cleaned_shopify_orders` | `stg_shopify_orders` |
+| `cleaned_customers` | `stg_customers` |
+| `all_orders_combined` | `int_orders` |
+| `orders_converted_to_usd` | `int_orders_fx` |
+| `revenue_per_day` | `fct_daily_revenue` |
+
+This lab uses the plain names so nothing has to be decoded while learning. The convention is worth recognizing later, because every dbt codebase you encounter in an interview or on the job will follow it.

@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>dbt Lineage</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: system-ui, sans-serif;
+      background: #1a1a1a;
+      color: #e0e0e0;
+    }
+    #container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    h1 {
+      margin-bottom: 10px;
+    }
+    svg {
+      background: #2a2a2a;
+      border: 1px solid #444;
+      border-radius: 4px;
+    }
+    .node {
+      cursor: pointer;
+    }
+    .node rect {
+      fill: #3a3a3a;
+      stroke: #666;
+      stroke-width: 2;
+    }
+    .node.staging rect {
+      fill: #2d4a5a;
+    }
+    .node.marts rect {
+      fill: #4a3a2d;
+    }
+    .node.highlight rect {
+      stroke: #ff6b6b;
+      stroke-width: 3;
+    }
+    .node text {
+      fill: #e0e0e0;
+      font-size: 12px;
+      pointer-events: none;
+    }
+    .edge {
+      stroke: #666;
+      stroke-width: 2;
+      fill: none;
+      marker-end: url(#arrowhead);
+    }
+    .edge.highlight {
+      stroke: #ff6b6b;
+      stroke-width: 3;
+    }
+    .timing-bar {
+      fill: #4a8f6a;
+      rx: 2;
+    }
+    #tooltip {
+      position: absolute;
+      background: #333;
+      border: 1px solid #666;
+      padding: 10px;
+      border-radius: 4px;
+      pointer-events: none;
+      display: none;
+      max-width: 600px;
+      font-size: 12px;
+      z-index: 1000;
+    }
+    #tooltip code {
+      display: block;
+      white-space: pre-wrap;
+      background: #1a1a1a;
+      padding: 8px;
+      border-radius: 3px;
+      margin-top: 5px;
+      font-size: 11px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <h1>dbt Lineage</h1>
+    <p>Click a node to highlight downstream dependencies. Hover for SQL.</p>
+    <svg id="graph" width="1200" height="600"></svg>
+  </div>
+  <div id="tooltip"></div>
+
+  <script>
+    const data = {"staging": [{"name": "cleaned_customers", "sql": "-- reads: {{ source('raw', 'customers') }}\n-- breaks if: gen.py has not run\nselect customer_id, email, country from {{ source('raw', 'customers') }}", "exec_time": 0, "deps": [], "layer": "staging", "depth": 0}, {"name": "cleaned_salesforce_orders", "sql": "-- reads: {{ source('raw', 'salesforce_orders') }}\n-- breaks if: gen.py has not run. Nothing here can tell you that.\nselect order_id, customer_id, amount, currency, created_at from {{ source('raw', 'salesforce_orders') }}", "exec_time": 0, "deps": [], "layer": "staging", "depth": 0}, {"name": "cleaned_shopify_orders", "sql": "-- reads: {{ source('raw', 'shopify_orders') }}\n-- breaks if: gen.py has not run\nselect order_ref              as order_key,\n       cust_email             as email,\n       total_cents / 100.0    as amount,\n       upper(trim(curr))      as currency,\n       placed_at              as created_at\nfrom {{ source('raw', 'shopify_orders') }}", "exec_time": 0, "deps": [], "layer": "staging", "depth": 0}], "marts": [{"name": "all_orders_combined", "sql": "-- reads: {{ ref('cleaned_salesforce_orders') }}, {{ ref('cleaned_shopify_orders') }}, {{ ref('cleaned_customers') }}\n-- breaks if: 01, 02 or 03 did not run. You get \"Table does not exist\" and it\n--            does not tell you which of the three is missing.\nselect 'salesforce' as source_system, cast(order_id as varchar) as order_key,\n       customer_id, amount, currency, created_at\nfrom {{ ref('cleaned_salesforce_orders') }}\nunion all\nselect 'shopify' as source_system, s.order_key, c.customer_id,\n       s.amount, s.currency, s.created_at\nfrom {{ ref('cleaned_shopify_orders') }} s\nleft join {{ ref('cleaned_customers') }} c on c.email = s.email", "exec_time": 0, "deps": ["cleaned_salesforce_orders", "cleaned_shopify_orders", "cleaned_customers"], "layer": "marts", "depth": 1}, {"name": "orders_converted_to_usd", "sql": "-- reads: {{ ref('all_orders_combined') }}, {{ source('raw', 'currency_exchange_rates') }}\n-- breaks if: 04 did not run. ALSO silently drops any row whose currency does\n--            not match a rate. Nothing warns. That is exercise 4.\nselect o.*, f.rate_to_usd, o.amount * f.rate_to_usd as amount_usd\nfrom {{ ref('all_orders_combined') }} o\njoin {{ source('raw', 'currency_exchange_rates') }} f\n  on f.currency = o.currency and f.rate_date = cast(o.created_at as date)", "exec_time": 0, "deps": ["all_orders_combined"], "layer": "marts", "depth": 2}, {"name": "revenue_per_day", "sql": "-- reads: {{ ref('orders_converted_to_usd') }}\n-- breaks if: 05 did not run\nselect cast(created_at as date) as revenue_date, source_system,\n       count(*) as order_count, sum(amount_usd) as revenue_usd\nfrom {{ ref('orders_converted_to_usd') }}\ngroup by 1, 2", "exec_time": 0, "deps": ["orders_converted_to_usd"], "layer": "marts", "depth": 3}]};
+
+    const svg = document.getElementById('graph');
+    const tooltip = document.getElementById('tooltip');
+
+    const width = 1200;
+    const height = 600;
+    const nodeWidth = 160;
+    const nodeHeight = 50;
+    const layerGap = 400;
+    const leftMargin = 100;
+
+    // Position nodes by depth
+    const positions = {};
+    const nodes = [];
+    const depthMap = new Map();
+
+    // Flatten all models
+    ['staging', 'marts'].forEach(layer => {
+      data[layer].forEach(node => {
+        nodes.push(node);
+      });
+    });
+
+    // Compute depth
+    function computeDepth(name, memo = {}) {
+      if (memo[name] !== undefined) return memo[name];
+      const node = nodes.find(n => n.name === name);
+      if (!node || node.deps.length === 0) {
+        memo[name] = 0;
+      } else {
+        memo[name] = 1 + Math.max(...node.deps.map(d => computeDepth(d, memo)));
+      }
+      return memo[name];
+    }
+
+    nodes.forEach(node => {
+      const depth = computeDepth(node.name);
+      if (!depthMap.has(depth)) depthMap.set(depth, []);
+      depthMap.get(depth).push(node);
+    });
+
+    // Position by depth columns
+    const sortedDepths = Array.from(depthMap.keys()).sort((a, b) => a - b);
+    sortedDepths.forEach((depth, colIdx) => {
+      const colNodes = depthMap.get(depth);
+      const x = leftMargin + colIdx * layerGap;
+      const verticalGap = Math.max(80, (height - 100) / Math.max(1, colNodes.length - 1));
+
+      colNodes.forEach((node, i) => {
+        const y = 50 + i * verticalGap;
+        // Determine layer from original data
+        const layer = (data.staging.find(n => n.name === node.name)) ? 'staging' : 'marts';
+        positions[node.name] = { x, y, layer };
+      });
+    });
+
+    // Build edge list
+    const edges = [];
+    nodes.forEach(node => {
+      node.deps.forEach(dep => {
+        if (positions[dep] && positions[node.name]) {
+          edges.push({ from: dep, to: node.name });
+        }
+      });
+    });
+
+    // Draw edges
+    const edgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    edgeGroup.setAttribute('id', 'edges');
+    svg.appendChild(edgeGroup);
+
+    // Arrow marker
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+    marker.setAttribute('id', 'arrowhead');
+    marker.setAttribute('markerWidth', '10');
+    marker.setAttribute('markerHeight', '10');
+    marker.setAttribute('refX', '9');
+    marker.setAttribute('refY', '3');
+    marker.setAttribute('orient', 'auto');
+    const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    polygon.setAttribute('points', '0 0, 10 3, 0 6');
+    polygon.setAttribute('fill', '#666');
+    marker.appendChild(polygon);
+    defs.appendChild(marker);
+    svg.appendChild(defs);
+
+    edges.forEach(edge => {
+      const from = positions[edge.from];
+      const to = positions[edge.to];
+
+      const x1 = from.x + nodeWidth;
+      const y1 = from.y + nodeHeight / 2;
+      const x2 = to.x;
+      const y2 = to.y + nodeHeight / 2;
+
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      const d = `M ${x1} ${y1} C ${x1 + 100} ${y1}, ${x2 - 100} ${y2}, ${x2} ${y2}`;
+      path.setAttribute('d', d);
+      path.setAttribute('class', 'edge');
+      path.setAttribute('data-from', edge.from);
+      path.setAttribute('data-to', edge.to);
+      edgeGroup.appendChild(path);
+    });
+
+    // Draw nodes
+    const nodeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    nodeGroup.setAttribute('id', 'nodes');
+    svg.appendChild(nodeGroup);
+
+    nodes.forEach(node => {
+      const pos = positions[node.name];
+      const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      g.setAttribute('class', `node ${pos.layer}`);
+      g.setAttribute('data-name', node.name);
+
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', pos.x);
+      rect.setAttribute('y', pos.y);
+      rect.setAttribute('width', nodeWidth);
+      rect.setAttribute('height', nodeHeight);
+      rect.setAttribute('rx', 4);
+      g.appendChild(rect);
+
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      text.setAttribute('x', pos.x + nodeWidth / 2);
+      text.setAttribute('y', pos.y + nodeHeight / 2 - 8);
+      text.setAttribute('text-anchor', 'middle');
+      text.textContent = node.name;
+      g.appendChild(text);
+
+      // Timing bar
+      if (node.exec_time > 0) {
+        const barWidth = Math.min(120, node.exec_time * 100);
+        const bar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        bar.setAttribute('class', 'timing-bar');
+        bar.setAttribute('x', pos.x + 20);
+        bar.setAttribute('y', pos.y + 32);
+        bar.setAttribute('width', barWidth);
+        bar.setAttribute('height', 4);
+        g.appendChild(bar);
+
+        const timeText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        timeText.setAttribute('x', pos.x + nodeWidth / 2);
+        timeText.setAttribute('y', pos.y + nodeHeight / 2 + 12);
+        timeText.setAttribute('text-anchor', 'middle');
+        timeText.setAttribute('style', 'font-size: 10px; fill: #999;');
+        timeText.textContent = `${node.exec_time.toFixed(2)}s`;
+        g.appendChild(timeText);
+      }
+
+      // Hover
+      g.addEventListener('mouseenter', e => {
+        tooltip.style.display = 'block';
+        tooltip.innerHTML = `<strong>${node.name}</strong><br>Layer: ${pos.layer}<br>Time: ${node.exec_time.toFixed(2)}s<code>${node.sql.substring(0, 500)}</code>`;
+      });
+
+      g.addEventListener('mousemove', e => {
+        tooltip.style.left = (e.pageX + 15) + 'px';
+        tooltip.style.top = (e.pageY + 15) + 'px';
+      });
+
+      g.addEventListener('mouseleave', () => {
+        tooltip.style.display = 'none';
+      });
+
+      // Click to highlight downstream
+      g.addEventListener('click', () => {
+        // Clear highlights
+        document.querySelectorAll('.node').forEach(n => n.classList.remove('highlight'));
+        document.querySelectorAll('.edge').forEach(e => e.classList.remove('highlight'));
+
+        // Find downstream
+        const downstream = new Set([node.name]);
+        const queue = [node.name];
+
+        while (queue.length > 0) {
+          const current = queue.shift();
+          edges.forEach(edge => {
+            if (edge.from === current && !downstream.has(edge.to)) {
+              downstream.add(edge.to);
+              queue.push(edge.to);
+            }
+          });
+        }
+
+        // Highlight
+        downstream.forEach(name => {
+          const nodeEl = document.querySelector(`[data-name="${name}"]`);
+          if (nodeEl) nodeEl.classList.add('highlight');
+        });
+
+        edges.forEach(edge => {
+          if (downstream.has(edge.from) && downstream.has(edge.to)) {
+            const edgeEl = document.querySelector(`[data-from="${edge.from}"][data-to="${edge.to}"]`);
+            if (edgeEl) edgeEl.classList.add('highlight');
+          }
+        });
+      });
+
+      nodeGroup.appendChild(g);
+    });
+  </script>
+</body>
+</html>

@@ -10,7 +10,7 @@ N_CUST, N_SF, N_SHOP = 5_000, 50_000, 20_000
 
 DDL = {
   "customers": "customer_id BIGINT, email VARCHAR, country VARCHAR, _loaded_at TIMESTAMP",
-  "fx_rates": "currency VARCHAR, rate_date DATE, rate_to_usd DOUBLE, _loaded_at TIMESTAMP",
+  "currency_exchange_rates": "currency VARCHAR, rate_date DATE, rate_to_usd DOUBLE, _loaded_at TIMESTAMP",
   "salesforce_orders": "order_id BIGINT, customer_id BIGINT, amount DOUBLE, "
                        "currency VARCHAR, created_at TIMESTAMP, _loaded_at TIMESTAMP",
   "shopify_orders": "order_ref VARCHAR, cust_email VARCHAR, total_cents BIGINT, "
@@ -49,7 +49,7 @@ def build(seed, defects):
         cutoff = BASE - timedelta(hours=3)
         shop = [r for r in shop if r[4] < cutoff]
 
-    return {"customers": customers, "fx_rates": fx,
+    return {"customers": customers, "currency_exchange_rates": fx,
             "salesforce_orders": sf, "shopify_orders": shop}
 
 

@@ -1,0 +1,13 @@
+version: 2
+sources:
+  - name: raw
+    schema: raw
+    loaded_at_field: _loaded_at
+    freshness:
+      warn_after: {count: 1, period: hour}
+      error_after: {count: 6, period: hour}
+    tables:
+      - name: salesforce_orders
+      - name: shopify_orders
+      - name: customers
+      - name: currency_exchange_rates

@@ -1,0 +1,21 @@
+version: 2
+models:
+  - name: cleaned_salesforce_orders
+    columns:
+      - name: order_id
+        data_tests: [unique, not_null]
+      - name: currency
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['USD', 'EUR', 'GBP', 'JPY']
+      - name: customer_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('cleaned_customers')
+                field: customer_id
+  - name: cleaned_customers
+    columns:
+      - name: customer_id
+        data_tests: [unique, not_null]
