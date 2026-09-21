@@ -23,7 +23,7 @@ stg_customers              stg_salesforce_orders      stg_shopify_orders      st
                            daily_revenue
 ```
 
-Four sources, seven models (four staging views, three marts tables), six data tests, and one singular test asserting parity between stage 1 and stage 2 pipelines.
+Four sources, six models (three staging views, three marts tables), six data tests, and one singular test asserting parity between stage 1 and stage 2 pipelines.
 
 ## Commands
 

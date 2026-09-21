@@ -33,7 +33,7 @@ Command: `cd stage2_dbt && DBT_PROFILES_DIR=. uv run dbt build`
 
 ## 2026-09-20: Lineage visualization
 
-Generated `stage3/lineage.html` from archived artifacts. File size 11,000 bytes, works offline from disk, no CDN dependencies. Click a node to highlight downstream subgraph, hover for compiled SQL. Timing bars display execution time from `run_results.json`.
+Generated `stage3/lineage.html` from archived artifacts. File size 12,108 bytes, works offline from disk, no CDN dependencies. Click a node to highlight downstream subgraph, hover for compiled SQL. Timing bars display execution time from `run_results.json`.
 
 ## 2026-09-20: Invocation ID desync artifact
 
