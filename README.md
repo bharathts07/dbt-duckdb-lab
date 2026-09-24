@@ -59,7 +59,7 @@ uv run python part3_look_at_artifacts/viz.py
 
 1. **README.md** (this file) for the overall structure
 2. **PAIN.md** for the six exercises demonstrating problems that dbt solves
-3. **LOG.md** to see build measurements and findings
+3. **docs/build-log.md** to see build measurements and findings
 4. **DAG.md** for the mermaid dependency graph
 5. **part3_look_at_artifacts/lineage.html** for an interactive offline visualization
 
