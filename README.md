@@ -2,6 +2,10 @@
 
 A hands-on learning repo demonstrating how dbt transforms SQL workflows. Built around a dual-pipeline reconciliation scenario: Salesforce and Shopify orders merge into one revenue table, with explicit exercises showing what breaks without dbt and how dbt solves it.
 
+
+**Start with [`docs/how-dbt-works.md`](docs/how-dbt-works.md)** for what this lab
+demonstrates and what dbt turned out to be worth. This file covers layout and commands.
+
 ## Schema
 
 ```
