@@ -73,6 +73,22 @@ The `run_dbt_and_save_history.sh` wrapper archives `target/*.json` after every r
 
 The `timing` command shows model execution times. At this scale (50K rows), all models take roughly the same time and the numbers are measurement noise. The view demonstrates the mechanism and where the data comes from; it becomes informative at real scale where one model typically dominates wall clock.
 
+### Run history is not committed
+
+`part3_look_at_artifacts/history/` is gitignored. Two reasons: dbt records the absolute
+path it was invoked from inside every `run_results.json`, so committing them would publish
+whoever's machine produced them, and the timings in someone else's runs tell you nothing
+about yours.
+
+Create your own in a few seconds:
+
+```bash
+cd part2_with_dbt
+./run_dbt_and_save_history.sh build
+./run_dbt_and_save_history.sh test
+cd .. && uv run python part3_look_at_artifacts/inspect.py runs
+```
+
 **See the artifact mismatch yourself.** `inspect.py` warns when a run's two JSON files
 disagree about which dbt invocation produced them. That is a real thing, not a contrived one,
 and you can cause it in two commands:

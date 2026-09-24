@@ -15,6 +15,16 @@ def load_artifacts(run_dir: Optional[str] = None) -> tuple[Dict[str, Any], Dict[
     Compare invocation_id across manifest and run_results because
     dbt source freshness rewrites one and not the other.
     """
+    # --live reads dbt's working folder instead of an archived copy. This is the
+    # only place a mismatched pair can actually appear: the archiver refuses to
+    # archive a run that produced no results, so archives are always matched.
+    if run_dir == "live":
+        target = Path(__file__).parent.parent / "part2_with_dbt" / "target"
+        if not target.exists():
+            print("No part2_with_dbt/target yet. Run dbt once first.", file=sys.stderr)
+            sys.exit(1)
+        return _read_pair(target)
+
     history = Path(__file__).parent / "history"
     if not history.exists():
         print("No history directory found. Run run_dbt_and_save_history.sh first.", file=sys.stderr)
@@ -32,6 +42,11 @@ def load_artifacts(run_dir: Optional[str] = None) -> tuple[Dict[str, Any], Dict[
             sys.exit(1)
         target = dirs[0]
 
+    return _read_pair(target)
+
+
+def _read_pair(target: Path) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Read manifest + run_results from one folder and compare their stamps."""
     manifest_path = target / "manifest.json"
     run_results_path = target / "run_results.json"
 
@@ -157,8 +172,24 @@ def cmd_timing(manifest: Dict[str, Any], run_results: Dict[str, Any], exec_times
     and the numbers are measurement noise. This view shows the mechanism and
     where the data comes from; it becomes informative at real scale.
     """
+    # If the two files describe different runs, these timings belong to a run the
+    # manifest knows nothing about. Printing them under a warning is how warnings
+    # get ignored, so refuse instead.
+    if (manifest.get("metadata", {}).get("invocation_id")
+            != run_results.get("metadata", {}).get("invocation_id")):
+        print("Refusing to print timings: the two files describe different runs.")
+        print("Any numbers here would come from a run the recipe book does not describe.")
+        print("Run 'dbt build' to write a matched pair, then try again.")
+        return
+
     nodes = manifest.get("nodes", {})
     elapsed = run_results.get("elapsed_time", 0)
+    ran = {r.get("unique_id") for r in run_results.get("results", [])}
+    if not any(n.get("resource_type") == "model" and nid in ran
+               for nid, n in nodes.items()):
+        print("This run contains no model results, so there is nothing to time.")
+        print("Commands like 'dbt source freshness' and 'dbt test' run no models.")
+        return
 
     # Get models with execution times
     model_times = []
@@ -214,12 +245,14 @@ def cmd_runs() -> None:
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: inspect.py <command> [args] [--run <dirname>]")
+        print("Usage: inspect.py <command> [args] [--run <dirname>|--run live]")
         print("Commands:")
         print("  runs             - list all archived runs with invocation IDs")
         print("  dag              - print nodes with layer and materialization")
         print("  blast <name>     - print everything downstream of node")
         print("  timing           - print models sorted by execution time")
+        print()
+        print("  --run live       - read dbt's live target/ folder instead of an archive")
         print()
         print("Options:")
         print("  --run <dirname>  - inspect specific run (default: latest)")

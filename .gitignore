@@ -5,3 +5,4 @@ logs/
 part2_with_dbt/target/
 part2_with_dbt/.user.yml
 __pycache__/
+part3_look_at_artifacts/history/
