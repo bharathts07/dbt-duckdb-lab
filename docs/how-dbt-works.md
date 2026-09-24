@@ -145,4 +145,4 @@ the table remains quietly wrong until a full refresh.
 1. This page, for what the lab establishes.
 2. `README.md`, for layout, commands, and two behaviours that otherwise look like bugs.
 3. `PAIN.md`, for the six exercises with their measured answers.
-4. `LOG.md`, for the build diary and raw measurements, only if the numbers matter.
+4. `docs/build-log.md`, for the build diary and raw measurements, only if the numbers matter.
